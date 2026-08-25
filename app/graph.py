@@ -9,10 +9,8 @@ from app.models import ChatMessage, GeneratedReport, Role, SessionState, Session
 from app.risk_classifier import classify, format_assessment
 from app.session_store import InMemorySessionStore
 from app.tools.retriever import create_retriever
-from app.tools.specialist_tools import (
-    agendar_inspecao_interna,
-    agendar_servico_externo,
-)
+from app.tools.specialist_tools import agendar_servico_externo
+from app.tools.cal_tools import get_cal_tools
 
 MAX_QUESTIONS = 5
 MIN_RESPONSE_LENGTH = 3
@@ -50,7 +48,7 @@ class ConversationGraph:
         self.llm = llm
         self.log_store = log_store
         self.retriever = create_retriever()
-        self.tools = [agendar_inspecao_interna, agendar_servico_externo]
+        self.tools = [agendar_servico_externo] + get_cal_tools()
         self.graph = self._build_graph()
 
     def invoke(self, session_id: str, message: str) -> ConversationGraphState:
@@ -260,13 +258,18 @@ class ConversationGraph:
         if wants_schedule:
             session.status = SessionStatus.awaiting_approval
             session.pending_tool_calls = [{
-                "name": "agendar_inspecao_interna",
-                "args": {"setor": session.sector or "Não informado", "detalhes": f"Inspeção solicitada após triagem de risco {session.classification}. Respostas do especialista: {session.specialist_answers}"},
+                "name": "cal_schedule_appointment",
+                "args": {
+                    "start_time": "2026-08-25T10:00:00-03:00",
+                    "attendee_name": session.user_name or "Colaborador",
+                    "attendee_email": "colaborador@empresa.com",
+                    "description": f"Inspeção de segurança no setor {session.sector or 'Não informado'} após triagem de risco {session.classification}. Respostas do especialista: {session.specialist_answers}",
+                },
                 "id": "tool_call_schedule_1"
             }]
             assistant_message = (
-                f"O especialista sugeriu a ação: **agendar_inspecao_interna** no setor **{session.sector}** "
-                f"com os detalhes: `{session.pending_tool_calls[0]['args']['detalhes']}`.\n\n"
+                f"O especialista sugeriu agendar uma inspeção de segurança via cal.com "
+                f"para o setor **{session.sector}**.\n\n"
                 "Para aprovar e agendar, digite **'sim'**. Para cancelar, digite **'não**'."
             )
             # Incluir tool_calls na mensagem para que _handle_approval possa encontrá-los
