@@ -1,0 +1,15 @@
+services:
+  sqlite:
+    image: keinos/sqlite3:latest
+    container_name: nr1-sqlite
+    restart: unless-stopped
+    user: "0:0"
+    working_dir: /data
+    command: ["sh", "-c", "mkdir -p /data && chmod 777 /data && touch /data/nr1.db && chmod 666 /data/nr1.db && tail -f /dev/null"]
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "sqlite3 /data/nr1.db 'PRAGMA quick_check;' | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

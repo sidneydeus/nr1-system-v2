@@ -1,0 +1,44 @@
+flowchart TD
+    A[Usuário acessa o frontend] --> B{Existe sessão salva?}
+    B -->|Sim| C[Carrega sessão via GET /sessions/id]
+    B -->|Não| D[Cria sessão via POST /sessions]
+    C --> E{Sessão concluída?}
+    E -->|Sim| F[Exibe histórico e botão Finalizar]
+    E -->|Não| G[Exibe conversa e habilita entrada]
+    D --> G
+
+    G --> H[Usuário envia nome]
+    H --> I[Backend registra resposta]
+    I --> J[Exibe pergunta fixa sobre o setor]
+    J --> K[Usuário envia setor]
+    K --> L[Backend registra resposta]
+    L --> M[Exibe perguntas fixas de triagem]
+
+    M --> N[Usuário responde às perguntas]
+    N --> O{Quinta resposta recebida?}
+    O -->|Não| M
+    O -->|Sim| P[Classifica categorias e nível de risco]
+    P --> Q[LLM gera o texto-base do relatório]
+    Q --> R[Adiciona classificação, evidências e encaminhamento]
+    R --> X{Classificação média ou alta?}
+    X -->|Sim| Y[send_admin_report_alert com session_id]
+    X -->|Não| S[Salva relatório no SQLite]
+    Y --> S
+    S --> T[Retorna confirmação sem enviar o relatório]
+    T --> U[Exibe sessão concluída e botão Finalizar]
+
+    U --> V[Usuário clica em Finalizar]
+    V --> W[Limpa conversa e remove sessão do localStorage]
+    W --> D
+
+    subgraph Backend
+        I
+        L
+        P
+        Q
+        R
+        Y
+        S[(SQLite: reports)]
+    end
+
+    R --> S
