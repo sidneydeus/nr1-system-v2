@@ -2,10 +2,6 @@ import os
 import sqlite3
 from unittest.mock import patch, MagicMock
 
-os.environ["CAL_COM_API_KEY"] = "test_api_key"
-os.environ["CAL_COM_EVENT_TYPE_ID"] = "12345"
-os.environ["CAL_COM_USERNAME"] = "test"
-
 from app.llm import LLMClient
 from app.report_store import SQLiteReportStore
 from app.service import ConversationService
@@ -60,23 +56,11 @@ def test_conversation_saves_report_without_sending_it_to_user(tmp_path, caplog) 
     # Usuário aceita agendar
     response = service.handle_message(session.session_id, "sim")
     assert response.status.value == "awaiting_approval"
-    assert "cal.com" in response.assistant_message
+    assert "inspeção de segurança" in response.assistant_message.lower()
 
-    # Usuário aprova o agendamento
-    mock_booking_response = MagicMock()
-    mock_booking_response.status_code = 200
-    mock_booking_response.json.return_value = {
-        "booking": {
-            "uid": "test-booking-uid",
-            "startTime": "2026-08-25T10:00:00-03:00",
-            "endTime": "2026-08-25T11:00:00-03:00",
-            "status": "confirmed",
-            "attendees": [{"name": "Ana", "email": "colaborador@empresa.com"}],
-        }
-    }
-    with patch("httpx.Client.post", return_value=mock_booking_response):
-        final_response = service.handle_message(session.session_id, "sim")
-        assert final_response.status.value == "complete"
+    # Usuário aprova o agendamento (MCP tool não precisa de mock HTTP)
+    final_response = service.handle_message(session.session_id, "sim")
+    assert final_response.status.value == "complete"
 
     snapshot = service.snapshot(session.session_id)
     assert snapshot.status.value == "complete"
@@ -100,7 +84,7 @@ def test_conversation_saves_report_without_sending_it_to_user(tmp_path, caplog) 
         "resposta 5",
     ]
     assert "Ação executada com sucesso" in final_response.assistant_message
-    assert "test-booking-uid" in final_response.assistant_message
+    assert "INSP-" in final_response.assistant_message
     assert "Classificação" not in final_response.assistant_message
 
     with sqlite3.connect(database_path) as connection:

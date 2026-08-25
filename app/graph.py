@@ -10,7 +10,7 @@ from app.risk_classifier import classify, format_assessment
 from app.session_store import InMemorySessionStore
 from app.tools.retriever import create_retriever
 from app.tools.specialist_tools import agendar_servico_externo
-from app.tools.cal_tools import get_cal_tools
+from app.tools.mcp_tools import get_mcp_tools
 
 MAX_QUESTIONS = 5
 MIN_RESPONSE_LENGTH = 3
@@ -48,7 +48,7 @@ class ConversationGraph:
         self.llm = llm
         self.log_store = log_store
         self.retriever = create_retriever()
-        self.tools = [agendar_servico_externo] + get_cal_tools()
+        self.tools = [agendar_servico_externo] + get_mcp_tools()
         self.graph = self._build_graph()
 
     def _create_logger(self, session: SessionState) -> StructuredLogger:
@@ -278,19 +278,20 @@ class ConversationGraph:
         previous_status = session.status
         if wants_schedule:
             session.status = SessionStatus.awaiting_approval
+            from datetime import datetime, timedelta
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
             session.pending_tool_calls = [{
-                "name": "cal_schedule_appointment",
+                "name": "schedule_inspection",
                 "args": {
-                    "start_time": "2026-08-25T10:00:00-03:00",
-                    "attendee_name": session.user_name or "Colaborador",
-                    "attendee_email": "colaborador@empresa.com",
-                    "description": f"Inspeção de segurança no setor {session.sector or 'Não informado'} após triagem de risco {session.classification}. Respostas do especialista: {session.specialist_answers}",
+                    "customer": session.user_name or "Colaborador",
+                    "date": tomorrow,
+                    "time": "14:00",
                 },
                 "id": "tool_call_schedule_1"
             }]
             assistant_message = (
-                f"O especialista sugeriu agendar uma inspeção de segurança via cal.com "
-                f"para o setor **{session.sector}**.\n\n"
+                f"O especialista sugeriu agendar uma inspeção de segurança "
+                f"para o setor **{session.sector}** no dia **{tomorrow} às 14:00**.\n\n"
                 "Para aprovar e agendar, digite **'sim'**. Para cancelar, digite **'não**'."
             )
             session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message, tool_calls=session.pending_tool_calls))
