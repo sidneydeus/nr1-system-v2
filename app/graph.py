@@ -4,7 +4,7 @@ from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import AIMessage, ToolMessage
 from app.alerts import send_admin_report_alert
 from app.llm import LLMClient
-from app.log_store import SQLiteLogStore
+from app.log_store import SQLiteLogStore, StructuredLogger
 from app.models import ChatMessage, GeneratedReport, Role, SessionState, SessionStatus
 from app.risk_classifier import classify, format_assessment
 from app.session_store import InMemorySessionStore
@@ -50,6 +50,14 @@ class ConversationGraph:
         self.retriever = create_retriever()
         self.tools = [agendar_servico_externo] + get_cal_tools()
         self.graph = self._build_graph()
+
+    def _create_logger(self, session: SessionState) -> StructuredLogger:
+        return StructuredLogger(
+            log_store=self.log_store,
+            session_id=session.session_id,
+            user_name=session.user_name,
+            sector=session.sector,
+        )
 
     def invoke(self, session_id: str, message: str) -> ConversationGraphState:
         return self.graph.invoke({"session_id": session_id, "message": message, "messages": []})
@@ -125,13 +133,17 @@ class ConversationGraph:
 
     def _load_session(self, state: ConversationGraphState) -> ConversationGraphState:
         session = self.store.get(state["session_id"])
-        return {"session": session, "previous_status": session.status}
+        logger = self._create_logger(session)
+        if session.status == SessionStatus.awaiting_name:
+            logger.session_start()
+        return {"session": session, "previous_status": session.status, "logger": logger}
 
     def _record_user_message(self, state: ConversationGraphState) -> ConversationGraphState:
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         message = state["message"].strip()
         session.messages.append(ChatMessage(role=Role.user, content=message))
-        return {"session": session}
+        return {"session": session, "logger": logger}
 
     def _route_turn(self, state: ConversationGraphState):
         previous_status = state["previous_status"]
@@ -184,6 +196,7 @@ class ConversationGraph:
 
     def _handle_processing(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         session.summary = self._build_summary(session)
         report = self._build_report(session)
         assessment = classify(session)
@@ -191,6 +204,7 @@ class ConversationGraph:
         classification = assessment.classification
         session.classification = classification
         session.report = report
+        logger.risk_classification(classification, {"categories": assessment.categories, "evidence": assessment.evidence})
         if classification in {"Médio / Alerta", "Alto / Crítico"}:
             session.status = SessionStatus.awaiting_specialist_consent
             assistant_message = (
@@ -207,15 +221,17 @@ class ConversationGraph:
                 "O relatório foi salvo para consulta administrativa."
             )
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
-        return {"session": session, "assistant_message": assistant_message, "report": report, "classification": classification}
+        return {"session": session, "assistant_message": assistant_message, "report": report, "classification": classification, "logger": logger}
 
     def _route_after_processing(self, state: ConversationGraphState):
         return "persist_session"
 
     def _handle_specialist_consent(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         wants_specialist = state["message"].strip().lower() == "sim"
         session.wants_specialist = wants_specialist
+        previous_status = session.status
         if wants_specialist:
             session.status = SessionStatus.specialist_collecting
             session.specialist_question_count = 0
@@ -224,14 +240,17 @@ class ConversationGraph:
         else:
             session.status = SessionStatus.complete
             assistant_message = "Entendido. A triagem está concluída. O relatório foi salvo para consulta administrativa."
+            logger.session_end(classification=session.classification)
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
-        return {"session": session, "assistant_message": assistant_message}
+        logger.state_transition(previous_status.value, session.status.value, {"wants_specialist": wants_specialist})
+        return {"session": session, "assistant_message": assistant_message, "logger": logger}
 
     def _route_after_specialist_consent(self, state: ConversationGraphState):
         return "persist_session"
 
     def _handle_specialist_collecting(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         message = self._validate_response(state["message"], "resposta")
         session.specialist_question_count += 1
         session.specialist_answers.append(message)
@@ -246,15 +265,17 @@ class ConversationGraph:
             assistant_message = self.llm.fixed_response("ask_question", self._current_specialist_question(session))
             session.specialist_asked_questions.append(assistant_message)
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
-        return {"session": session, "assistant_message": assistant_message}
+        return {"session": session, "assistant_message": assistant_message, "logger": logger}
 
     def _route_after_specialist_collecting(self, state: ConversationGraphState):
         return "persist_session"
 
     def _handle_schedule_consent(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         wants_schedule = state["message"].strip().lower() == "sim"
         session.wants_schedule = wants_schedule
+        previous_status = session.status
         if wants_schedule:
             session.status = SessionStatus.awaiting_approval
             session.pending_tool_calls = [{
@@ -272,19 +293,21 @@ class ConversationGraph:
                 f"para o setor **{session.sector}**.\n\n"
                 "Para aprovar e agendar, digite **'sim'**. Para cancelar, digite **'não**'."
             )
-            # Incluir tool_calls na mensagem para que _handle_approval possa encontrá-los
             session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message, tool_calls=session.pending_tool_calls))
         else:
             session.status = SessionStatus.complete
             assistant_message = "Entendido. A triagem está concluída. O relatório foi salvo para consulta administrativa."
-            session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
-        return {"session": session, "assistant_message": assistant_message}
+            logger.session_end(classification=session.classification)
+        session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
+        logger.state_transition(previous_status.value, session.status.value, {"wants_schedule": wants_schedule})
+        return {"session": session, "assistant_message": assistant_message, "logger": logger}
 
     def _route_after_schedule_consent(self, state: ConversationGraphState):
         return "persist_session"
 
     def _handle_complete(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         if not session.report:
             report = self._build_report(session)
             assessment = classify(session)
@@ -294,9 +317,12 @@ class ConversationGraph:
         else:
             report = session.report
         assistant_message = "Sessão concluída. O relatório foi salvo com sucesso."
+        previous_status = session.status
         session.status = SessionStatus.complete
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
-        return {"session": session, "assistant_message": assistant_message, "report": report, "classification": session.classification}
+        logger.session_end(classification=session.classification)
+        logger.state_transition(previous_status.value, session.status.value, {})
+        return {"session": session, "assistant_message": assistant_message, "report": report, "classification": session.classification, "logger": logger}
 
     def _route_after_turn(self, state: ConversationGraphState):
         classification = state.get("classification")
@@ -306,7 +332,9 @@ class ConversationGraph:
 
     def _handle_approval(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         approved = state["message"].strip().lower() == "sim"
+        logger.human_approval("schedule_inspection", approved, {"classification": session.classification, "sector": session.sector})
         if approved:
             last_tool_call_message = None
             for msg in reversed(session.messages):
@@ -324,16 +352,19 @@ class ConversationGraph:
                     })
                 ai_message = AIMessage(content=last_tool_call_message.content or "", tool_calls=tool_calls)
                 all_messages = [m for m in session.messages] + [ai_message]
-                return {"session": session, "messages": all_messages, "classification": session.classification, "report": session.report}
+                return {"session": session, "messages": all_messages, "classification": session.classification, "report": session.report, "logger": logger}
             else:
                 all_messages = [m for m in session.messages]
-                return {"session": session, "messages": all_messages, "classification": session.classification, "report": session.report}
+                return {"session": session, "messages": all_messages, "classification": session.classification, "report": session.report, "logger": logger}
         else:
             assistant_message = "Acao cancelada pelo usuario."
             session.pending_tool_calls = []
+            previous_status = session.status
             session.status = SessionStatus.complete
             session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
-            return {"session": session, "assistant_message": assistant_message, "classification": session.classification, "report": session.report}
+            logger.session_end(classification=session.classification)
+            logger.state_transition(previous_status.value, session.status.value, {"approved": False})
+            return {"session": session, "assistant_message": assistant_message, "classification": session.classification, "report": session.report, "logger": logger}
 
     def _route_after_approval(self, state: ConversationGraphState):
         has_pending = bool(state["session"].pending_tool_calls)
@@ -341,7 +372,9 @@ class ConversationGraph:
 
     def _send_admin_report_alert(self, state: ConversationGraphState):
         classification = state["classification"]
-        if not classification: return state
+        logger = state.get("logger")
+        if not classification:
+            return {"logger": logger}
         message = "O relatório gerado necessita de ação de verificação de risco."
         send_admin_report_alert(state["session"].session_id, classification, message, self.log_store)
         return {
@@ -349,10 +382,12 @@ class ConversationGraph:
             "report": state["session"].report,
             "classification": state["classification"],
             "assistant_message": state.get("assistant_message", ""),
+            "logger": logger,
         }
 
     def _execute_tools(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         messages = state.get("messages", [])
         tool_messages = []
         for msg in messages:
@@ -369,11 +404,13 @@ class ConversationGraph:
                             break
                     if tool_func:
                         result = tool_func.invoke(tool_args)
+                        logger.tool_invocation(tool_name, tool_args, result)
                         tool_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id))
-        return {"messages": tool_messages, "session": session, "classification": session.classification, "report": session.report}
+        return {"messages": tool_messages, "session": session, "classification": session.classification, "report": session.report, "logger": logger}
 
     def _process_tool_result(self, state: ConversationGraphState):
         session = state["session"]
+        logger = state.get("logger", self._create_logger(session))
         messages = state.get("messages", [])
         tool_result = None
         for msg in reversed(messages):
@@ -385,13 +422,16 @@ class ConversationGraph:
         else:
             assistant_message = "Ação executada com sucesso."
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
+        previous_status = session.status
         session.status = SessionStatus.complete
         session.pending_tool_calls = []
-        return {"session": session, "assistant_message": assistant_message, "classification": session.classification, "report": session.report}
+        logger.session_end(classification=session.classification)
+        logger.state_transition(previous_status.value, session.status.value, {"tool_result": tool_result})
+        return {"session": session, "assistant_message": assistant_message, "classification": session.classification, "report": session.report, "logger": logger}
 
     def _persist_session(self, state: ConversationGraphState):
         self.store.update(state["session"])
-        return state
+        return {"logger": state.get("logger")}
 
     def _build_summary(self, s: SessionState):
         return f"Nome: {s.user_name or 'N/A'} | Setor: {s.sector or 'N/A'} | Perguntas: {s.question_count}"

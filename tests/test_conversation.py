@@ -108,21 +108,27 @@ def test_conversation_saves_report_without_sending_it_to_user(tmp_path, caplog) 
             "SELECT session_id, user_name, sector, report, classification FROM reports WHERE session_id = ?",
             (session.session_id,),
         ).fetchone()
-        log = connection.execute(
-            "SELECT session_id, level, event, message FROM logs WHERE session_id = ?",
+        logs = connection.execute(
+            "SELECT session_id, level, event, message FROM logs WHERE session_id = ? ORDER BY created_at",
             (session.session_id,),
-        ).fetchone()
+        ).fetchall()
 
     assert report is not None
     assert report[:3] == (session.session_id, "Ana", "Operações")
     assert "Classificação de risco: Médio / Alerta" in report[3]
     assert report[4] == "Médio / Alerta"
-    assert log == (
-        session.session_id,
-        "WARNING",
-        "ADMIN_REPORT_ALERT",
-        "classification=Médio / Alerta; O relatório gerado necessita de ação de verificação de risco.",
-    )
+
+    admin_alert_logs = [log for log in logs if log[2] == "ADMIN_REPORT_ALERT"]
+    assert len(admin_alert_logs) == 1
+    assert admin_alert_logs[0][1] == "WARNING"
+    alert_message = admin_alert_logs[0][3]
+    assert '"classification": "Médio / Alerta"' in alert_message
+    assert "necessita de ação de verificação de risco" in alert_message
+
+    risk_classification_logs = [log for log in logs if log[2] == "RISK_CLASSIFICATION"]
+    assert len(risk_classification_logs) >= 1
+    assert "Médio / Alerta" in risk_classification_logs[0][3]
+
     assert "ADMIN_REPORT_ALERT" in caplog.text
     assert session.session_id in caplog.text
     assert "necessita de ação de verificação de risco" in caplog.text
