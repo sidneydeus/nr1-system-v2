@@ -32,9 +32,31 @@ def test_conversation_saves_report_without_sending_it_to_user(tmp_path, caplog) 
     for i in range(5):
         response = service.handle_message(session.session_id, f"resposta {i + 1}")
 
-    assert response.status.value == "awaiting_approval"
+    # 5ª resposta: processamento e classificação acontecem na mesma invocação
+    # Para risco Médio/Alto, status vai para awaiting_specialist_consent
+    assert response.status.value == "awaiting_specialist_consent"
+    assert "Classificação de risco: **Médio / Alerta**" in response.assistant_message
+    assert "Gostaria de compartilhar mais detalhes com um agente especialista" in response.assistant_message
 
-    # Simula a aprovação do usuário para concluir o fluxo (especialista)
+    # Usuário aceita falar com especialista
+    response = service.handle_message(session.session_id, "sim")
+    assert response.status.value == "specialist_collecting"
+    assert "Considerando os procedimentos de segurança" in response.assistant_message
+
+    # Usuário responde 5 perguntas do especialista
+    for i in range(5):
+        response = service.handle_message(session.session_id, f"resposta especialista {i + 1}")
+
+    # Após 5 perguntas do especialista, pergunta sobre agendamento
+    assert response.status.value == "awaiting_schedule_consent"
+    assert "Deseja solicitar o agendamento agora" in response.assistant_message
+
+    # Usuário aceita agendar
+    response = service.handle_message(session.session_id, "sim")
+    assert response.status.value == "awaiting_approval"
+    assert "agendar_inspecao_interna" in response.assistant_message
+
+    # Usuário aprova o agendamento
     final_response = service.handle_message(session.session_id, "sim")
     assert final_response.status.value == "complete"
 
@@ -44,7 +66,6 @@ def test_conversation_saves_report_without_sending_it_to_user(tmp_path, caplog) 
     assert snapshot.user_name == "Ana"
     assert snapshot.sector == "Operações"
     assert snapshot.summary is not None
-    # Fluxo com especialista tem mais mensagens (especialista, aprovação, execução de ferramenta)
     assert len(snapshot.messages) > 14
     assert snapshot.asked_questions == [
         "Conte como é o trabalho que você realiza e em que local ele acontece.",
@@ -60,10 +81,8 @@ def test_conversation_saves_report_without_sending_it_to_user(tmp_path, caplog) 
         "resposta 4",
         "resposta 5",
     ]
-    # Mensagem final agora confirma execução da ação do especialista
     assert "Ação executada com sucesso" in final_response.assistant_message
     assert "Protocolo: INSP-2026-98765" in final_response.assistant_message
-    # Relatório NÃO é enviado ao usuário (não contém "Classificação")
     assert "Classificação" not in final_response.assistant_message
 
     with sqlite3.connect(database_path) as connection:

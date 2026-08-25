@@ -11,8 +11,12 @@ class SessionStatus(str, Enum):
     awaiting_name = "awaiting_name"
     awaiting_sector = "awaiting_sector"
     collecting = "collecting"
-    complete = "complete"
+    processing = "processing"
+    awaiting_specialist_consent = "awaiting_specialist_consent"
+    specialist_collecting = "specialist_collecting"
+    awaiting_schedule_consent = "awaiting_schedule_consent"
     awaiting_approval = "awaiting_approval"
+    complete = "complete"
     error = "error"
 
 class Role(str, Enum):
@@ -41,6 +45,11 @@ class SessionState(BaseModel):
     pending_tool_calls: list = Field(default_factory=list)
     classification: str | None = None
     report: str | None = None
+    specialist_question_count: int = 0
+    specialist_asked_questions: list[str] = Field(default_factory=list)
+    specialist_answers: list[str] = Field(default_factory=list)
+    wants_specialist: bool | None = None
+    wants_schedule: bool | None = None
 
 
 class SessionCreateResponse(BaseModel):
