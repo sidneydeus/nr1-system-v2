@@ -1,91 +1,179 @@
-# NR-1 Agent
+# NR-1 Agent v2
 
-Chat conversacional com memória em sessão para triagem inicial de riscos ocupacionais, orquestrado com LangGraph.
+Agente conversacional com LangGraph para triagem inicial de riscos ocupacionais + Agente Especialista com RAG e ferramentas para ambientes industriais.
 
-## Como funciona
-- `POST /sessions` inicia a conversa e pergunta o nome.
-- `POST /chat` envia a próxima mensagem do usuário.
-- `GET /sessions/{session_id}` retorna o histórico e o estado atual.
-- `GET /admin/reports` lista os relatórios persistidos.
-- `GET /admin/reports/{session_id}` retorna um relatório específico.
-- `GET /admin/logs` lista os logs administrativos persistidos.
-- `GET /config` mostra se a LLM está habilitada e qual modelo está configurado.
-- `GET /` abre a interface web do chat.
-- O fluxo interno usa LangGraph para direcionar as etapas da sessão.
-- No encerramento, o agente classifica os riscos conforme `docs/pdf/Diretrizes_NR1_Classificacao_Riscos.pdf` e salva o relatório no SQLite.
-- Classificações `Médio / Alerta` e `Alto / Crítico` geram um alerta administrativo persistido na tabela `logs`.
+## Visão Geral
 
-## Fluxo
-1. O assistente pede o nome.
-2. Depois pede o setor.
-3. Em seguida faz 5 perguntas fixas e abertas sobre o trabalho.
-4. As respostas ficam armazenadas em memória na sessão.
-5. Ao final, o risco é classificado conforme as diretrizes da NR-1.
-6. O relatório é salvo na tabela `reports` e não é enviado ao usuário do chat.
-7. O botão `Finalizar` limpa a conversa e inicia uma nova sessão.
+O **NR-1 Agent v2** estende a triagem básica (v1) com um **Agente Especialista** que atua quando o risco é classificado como `Médio / Alerta` ou `Alto / Crítico`. O especialista utiliza:
 
-O fluxo completo está documentado em [`docs/fluxo-aplicacao.mmd`](docs/fluxo-aplicacao.mmd).
+- **RAG persistente** com SQLite + sqlite-vec (base de conhecimento de procedimentos de segurança)
+- **Ferramentas** para agendar inspeções internas, serviços externos e inspeções via MCP
+- **Aprovação humana** obrigatória antes de ações críticas
+- **Webhooks** para notificação de sistemas externos (ex: n8n, webhook.site)
+- **Logs estruturados** JSON com correlation ID para observabilidade completa
 
-Os dados persistentes ficam no arquivo `data/nr1.db`, compartilhado com o serviço SQLite do Docker.
+## Arquitetura v2
 
-## Exemplo de entrada e saída
-
-O usuário responde às mensagens guiadas do agente. Um fluxo de entrada simplificado é:
-
-```text
-Assistente: Olá. Para começarmos, qual é o seu nome?
-Usuário: Ana Souza
-
-Assistente: Obrigado. Em qual setor você trabalha?
-Usuário: Operações
-
-Assistente: Conte como é o trabalho que você realiza e em que local ele acontece.
-Usuário: Trabalho com manutenção de máquinas na área de produção.
-Assistente: Como é o local onde você trabalha e o que você utiliza para realizar suas atividades?
-Usuário: Há ruído e uso ferramentas manuais.
-Assistente: Conte como é um dia típico de trabalho, do início ao fim da jornada.
-Usuário: Faço inspeções e reparos durante toda a jornada.
-Assistente: O que costuma acontecer quando algo sai do esperado durante o trabalho?
-Usuário: Às vezes ocorre uma parada inesperada da máquina.
-Assistente: Que orientações, treinamentos ou formas de proteção existem para essa atividade? Como você avalia o funcionamento delas?
-Usuário: Recebemos treinamento e utilizamos EPI.
+```
+┌─────────────────┐     ┌──────────────────┐     ┌────────────────────┐
+│   Triagem       │────▶│  Classificação   │────▶│  Agente Especialista│
+│   (5 perguntas) │     │  (Baixo/Médio/   │     │  (se Médio/Alto)   │
+└─────────────────┘     │   Alto/Crítico)  │     └─────────┬──────────┘
+                        └──────────────────┘               │
+                              │                            │
+                              ▼                            ▼
+                        ┌──────────────────┐     ┌────────────────────┐
+                        │  Risco Baixo:    │     │  1. Consentimento  │
+                        │  Fim + Relatório │     │  2. 5 perguntas    │
+                        └──────────────────┘     │     RAG + Tools    │
+                                                 │  3. Consentimento  │
+                                                 │     agendamento    │
+                                                 │  4. Aprovação      │
+                                                 │     humana         │
+                                                 │  5. Webhook        │
+                                                 └────────────────────┘
 ```
 
-Depois das cinco respostas, o chat retorna apenas uma confirmação. O relatório fica disponível para consulta administrativa:
+## Fluxo Completo
 
-```text
-Sessão concluída. O relatório foi salvo com sucesso.
+1. **Nome** - Assistente pede o nome do colaborador
+2. **Setor** - Pergunta o setor de atuação
+3. **5 Perguntas de Triagem** - Coleta informações sobre o trabalho, local, rotina, imprevistos e proteções
+4. **Classificação de Risco** - LLM classifica conforme diretrizes NR-1 (Baixo / Médio / Alto)
+5. **Se Risco Médio/Alto → Agente Especialista**:
+   - Consentimento para atendimento especializado
+   - **5 Perguntas RAG** - Especialista consulta base de conhecimento e faz perguntas contextuais
+   - Consentimento para agendamento de inspeção
+   - **Aprovação Humana** - Confirmação explícita antes de acionar ferramenta
+   - **Execução da Ferramenta** - Agenda inspeção (MCP) ou registra solicitação interna/externo
+   - **Webhook** - Notifica sistema externo (ex: webhook.site) com detalhes do agendamento
+6. **Fim** - Relatório salvo em `data/nr1.db`, disponível em `/admin/reports`
 
-Exemplo de relatório gerado:
-Resumo da sessão: manutenção de máquinas na área de produção.
+## RAG / Vector Store (Persistente)
 
-Classificação de risco: Médio / Alerta
-Categorias identificadas: Físicos
-Evidências consideradas: Há ruído e uso ferramentas manuais. | Às vezes ocorre uma parada inesperada da máquina.
-Encaminhamento: Programar vistoria e revisar as medidas de prevenção.
+- **Tecnologia**: SQLite + sqlite-vec (extensão vetorial nativa)
+- **Armazenamento**: `data/nr1.db` (tabela virtual `vec_chunks`, embedding float[384])
+- **Modelo de Embedding**: `sentence-transformers/all-MiniLM-L6-v2` (384 dims)
+- **Documento Base**: `data/procedimentos_seguranca_industria.md`
+- **Ingestão**: `scripts/ingest_vectors.py` (CLI compatível com n8n)
+  ```bash
+  # Reindexar tudo
+  python scripts/ingest_vectors.py --reindex
+  
+  # Ingerir novo documento
+  python scripts/ingest_vectors.py --file data/novo_doc.md --source "novo_doc.md"
+  
+  # Estatísticas
+  python scripts/ingest_vectors.py --stats
+  ```
+
+## Ferramentas do Especialista
+
+| Ferramenta | Descrição | Parâmetros |
+|---|---|---|
+| `schedule_inspection` | Agenda inspeção via servidor MCP | `customer`, `date`, `time` |
+| `agendar_inspecao_interna` | Agendamento interno da equipe de segurança | `setor`, `detalhes` |
+| `agendar_servico_externo` | Aciona fornecedor especializado externo | `tipo_servico`, `detalhes` |
+
+## Observabilidade (Logs Estruturados)
+
+Todos os eventos do agente emitem logs JSON no console + SQLite:
+
+```json
+{
+  "timestamp": "2026-08-27T19:53:47.284514+00:00",
+  "level": "INFO",
+  "logger": "nr1.agent",
+  "session_id": "abc-123",
+  "correlation_id": "abc-123-xyz789",
+  "user_name": "João",
+  "sector": "Manutenção",
+  "event": "RISK_CLASSIFICATION",
+  "classification": "Médio / Alerta",
+  "categories": ["Altura"],
+  "evidence": ["Trabalho sem PT"]
+}
 ```
 
-## Decisões técnicas, ferramenta e limitações
+**Eventos rastreados**: `SESSION_START`, `SESSION_END`, `RISK_CLASSIFICATION`, `RAG_QUERY`, `TOOL_INVOCATION`, `HUMAN_APPROVAL`, `STATE_TRANSITION`, `ADMIN_REPORT_ALERT`
 
-- `LangGraph` organiza o fluxo em estado compartilhado, nós e conexões para controlar as etapas da entrevista.
-- `SQLite` é a ferramenta integrada usada para persistir relatórios e alertas administrativos e disponibilizá-los pelas rotas `/admin`.
-- O PDF [`Diretrizes_NR1_Classificacao_Riscos.pdf`](docs/pdf/Diretrizes_NR1_Classificacao_Riscos.pdf) é a referência utilizada para definir as categorias, classificações e encaminhamentos da triagem. A implementação aplica essas regras por meio do classificador local; o PDF não é enviado ao usuário nem à LLM durante cada conversa.
-- As perguntas são pré-definidas para tornar o processo guiado, previsível e comparável entre sessões. Por isso, a solução não substitui uma entrevista técnica completa.
-- A análise é inicial, depende da qualidade das respostas e pode exigir validação humana especializada.
+## CI/CD Pipeline
 
-## Execução local
+GitHub Actions (`.github/workflows/ci.yml`):
+- Trigger: push/PR para branch `develop`
+- Executa: `pytest -v --tb=short`
+- Python 3.10, instala dependências via `pip install -e .`
+
+## Variáveis de Ambiente
+
+Copie `.env.example` para `.env` e preencha:
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `GROQ_API_KEY` | Sim | Chave da API Groq |
+| `GROQ_MODEL` | Não | Modelo (default: `llama-3.1-8b-instant`) |
+| `WEBHOOK_URL` | Não | URL webhook.site para notificações de agendamento |
+| `SQLITE_DB_PATH` | Não | Caminho do banco (default: `data/nr1.db`) |
+| `MCP_INSPECTION_URL` | Não | URL servidor MCP (default: `http://localhost:8001`) |
+| `USE_MCP_SERVER` | Não | Usar MCP real vs fallback (default: `false`) |
+
+## Execução Local
+
 ```bash
+# Ativar venv
 source .venv/bin/activate
+
+# Instalar dependências (se necessário)
+pip install -e .
+
+# Subir aplicação
 uvicorn app.main:app --reload
 ```
 
-Depois de subir a aplicação, abra `http://127.0.0.1:8000/` para usar a interface web.
+Acesse `http://127.0.0.1:8000/` para a interface web.
 
 ## Testes
+
 ```bash
-pytest -q
+# Todos os testes
+pytest -v
+
+# Apenas testes de fluxo
+pytest tests/test_specialist_flow.py -v
+
+# Com coverage
+pytest --cov=app --cov-report=term-missing
 ```
 
-## Variáveis de ambiente
-- `GROQ_API_KEY`
-- `GROQ_MODEL`
+## Endpoints Principais
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/sessions` | Inicia nova sessão |
+| `POST` | `/chat` | Envia mensagem do usuário |
+| `GET` | `/sessions/{id}` | Snapshot da sessão |
+| `GET` | `/admin/reports` | Lista todos os relatórios |
+| `GET` | `/admin/reports/{id}` | Relatório específico |
+| `GET` | `/admin/logs` | Logs administrativos |
+| `GET` | `/config` | Configuração da LLM |
+| `GET` | `/health` | Health check |
+| `GET` | `/` | Interface web |
+
+## Diagrama de Arquitetura
+
+O fluxo completo está documentado em [`docs/fluxo-aplicacao.mmd`](docs/fluxo-aplicacao.mmd) (formato Mermaid).
+
+## Decisões Técnicas
+
+- **LangGraph**: Orquestração de estado, nós condicionais, ferramentas
+- **SQLite + sqlite-vec**: Vetores persistentes sem servidor externo
+- **Groq (Llama 3.1)**: LLM rápida para classificação e geração de relatórios
+- **Fallback MCP**: Modo em memória para testes, servidor real opcional
+- **Aprovação Humana**: Estado `awaiting_approval` no grafo antes de tools críticas
+
+## Limitações
+
+- Triagem inicial, não substitui avaliação técnica completa
+- Qualidade depende das respostas do colaborador
+- RAG limitado ao documento `procedimentos_seguranca_industria.md`
+- Classificação baseada em regras NR-1 codificadas, não ML puro

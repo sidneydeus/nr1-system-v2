@@ -46,10 +46,10 @@ Este plano de ação descreve os passos para evoluir o `nr1-agent`, introduzindo
     -   [ ] Escrever um teste para validar o funcionamento do `retriever` do RAG.
 -   [ ] **(Segurança) Teste de Prompt Injection:**
     -   [ ] Criar um cenário de teste para verificar se uma entrada maliciosa pode fazer o agente especialista desviar de suas instruções ou acionar ferramentas indevidamente.
--   [ ] **(Observabilidade) Logs Estruturados do Agente:**
-    -   [ ] Implementar logging estruturado (JSON) para rastrear decisões do agente: classificação de risco, consulta RAG (query + documentos recuperados), ferramentas acionadas (nome + parâmetros + resultado), aprovações humanas.
-    -   [ ] Adicionar correlation ID para rastrear uma sessão completa do início ao fim.
-    -   [ ] Incluir timestamps, nível de log e contexto da sessão (session_id, user_name, setor) em cada entrada.
+-   [x] **(Observabilidade) Logs Estruturados do Agente:**
+    -   [x] Implementar logging estruturado (JSON) para rastrear decisões do agente: classificação de risco, consulta RAG (query + documentos recuperados), ferramentas acionadas (nome + parâmetros + resultado), aprovações humanas.
+    -   [x] Adicionar correlation ID para rastrear uma sessão completa do início ao fim.
+    -   [x] Incluir timestamps, nível de log e contexto da sessão (session_id, user_name, setor) em cada entrada.
 
 ---
 
@@ -57,16 +57,20 @@ Este plano de ação descreve os passos para evoluir o `nr1-agent`, introduzindo
 
 **Foco:** Automatizar a verificação de qualidade e preparar a entrega.
 
--   [ ] **(DevOps) Configurar Pipeline de CI:**
-    -   [ ] Criar um workflow no GitHub Actions (`.github/workflows/ci.yml`) que execute `pytest` automaticamente a cada push na branch `develop`.
--   [ ] **(Automação Low-Code) Integração com Webhook:**
-    -   [ ] Após uma ferramenta ser executada com sucesso (ex: agendamento), acionar um webhook para notificar um serviço externo (usar `webhook.site` para simulação).
+-   [x] **(DevOps) Configurar Pipeline de CI:**
+    -   [x] Criar um workflow no GitHub Actions (`.github/workflows/ci.yml`) que execute `pytest` automaticamente a cada push na branch `develop`.
+-   [ ] **(DevOps) Migrar RAG para SQLite + sqlite-vec (Persistência Local):**
+    -   [ ] Adicionar dependência `sqlite-vec` (via `sqlite-utils` ou `sqlite-vec-py`) ao `pyproject.toml`.
+    -   [ ] Criar tabela virtual `vec_chunks` no `data/nr1.db` existente (embedding float[384] + content + source).
+    -   [ ] Reescrever `app/tools/retriever.py` para usar sqlite-vec em vez de FAISS em memória.
+    -   [ ] Criar script de ingestão standalone (`scripts/ingest_vectors.py`) compatível com n8n (CLI/HTTP).
+    -   [ ] Testar busca vetorial e validar qualidade equivalente ao FAISS.
+-   [x] **(Automação Low-Code) Integração com Webhook:**
+    -   [x] Após uma ferramenta ser executada com sucesso (ex: agendamento), acionar um webhook para notificar um serviço externo (usar `webhook.site` para simulação).
 -   [ ] **(Documentação) Atualizar README.md:**
     -   [ ] Descrever o novo fluxo com o agente especialista, a base de conhecimento RAG e as ferramentas.
     -   [ ] Adicionar um novo diagrama da arquitetura.
--   [ ] **(Entrega) Gravar Vídeo de Demonstração:**
-    -   [ ] Produzir um vídeo (10-12 min) demonstrando um caso de uso completo: da triagem ao atendimento especializado, incluindo o uso de RAG e ferramentas.
-    -   [ ] Publicar no YouTube e adicionar o link ao README.
+
 -   [ ] **(Entrega) Checklist Final:**
     -   [ ] Organizar todas as evidências (prompts, testes, análises) na pasta `/docs`.
     -   [ ] Revisar e submeter todos os artefatos no AVA.
