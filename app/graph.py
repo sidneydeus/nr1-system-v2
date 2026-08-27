@@ -11,6 +11,7 @@ from app.session_store import InMemorySessionStore
 from app.tools.retriever import create_retriever
 from app.tools.specialist_tools import agendar_servico_externo
 from app.tools.mcp_tools import get_mcp_tools
+from app.webhook import notify_scheduling_webhook
 
 MAX_QUESTIONS = 5
 MIN_RESPONSE_LENGTH = 3
@@ -428,6 +429,35 @@ class ConversationGraph:
         session.pending_tool_calls = []
         logger.session_end(classification=session.classification)
         logger.state_transition(previous_status.value, session.status.value, {"tool_result": tool_result})
+
+        # Webhook notification for scheduling tools
+        scheduling_tools = {"schedule_inspection", "agendar_inspecao_interna", "agendar_servico_externo"}
+        for msg in messages:
+            tool_calls = getattr(msg, 'tool_calls', None)
+            if tool_calls:
+                for tc in tool_calls:
+                    if tc["name"] in scheduling_tools:
+                        # Find the corresponding ToolMessage result
+                        result = None
+                        for m in reversed(messages):
+                            if isinstance(m, ToolMessage) and m.tool_call_id == tc["id"]:
+                                result = m.content
+                                break
+                        import asyncio
+                        asyncio.create_task(notify_scheduling_webhook(
+                            f"{tc['name']}_completed",
+                            {
+                                "session_id": session.session_id,
+                                "user_name": session.user_name,
+                                "sector": session.sector,
+                                "classification": session.classification,
+                                "tool": tc["name"],
+                                "args": tc["args"],
+                                "result": result,
+                            }
+                        ))
+                        break
+
         return {"session": session, "assistant_message": assistant_message, "classification": session.classification, "report": session.report, "logger": logger}
 
     def _persist_session(self, state: ConversationGraphState):
