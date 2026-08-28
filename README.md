@@ -171,6 +171,26 @@ O fluxo completo está documentado em [`docs/fluxo-aplicacao.mmd`](docs/fluxo-ap
 - **Fallback MCP**: Modo em memória para testes, servidor real opcional
 - **Aprovação Humana**: Estado `awaiting_approval` no grafo antes de tools críticas
 
+## Reset do Banco de Dados
+
+Para limpar todos os dados (logs, relatórios, vetores RAG) e reiniciar do zero:
+
+```bash
+# Opção 1: Script dedicado (recomendado)
+python scripts/reset_db.py
+
+# Opção 2: Remover arquivo (tabelas recriadas automaticamente no próximo start)
+rm data/nr1.db
+
+# Após reset, reindexar base de conhecimento RAG:
+python scripts/ingest_vectors.py --reindex
+```
+
+**Tabelas afetadas:**
+- `logs` - Logs estruturados JSON
+- `reports` - Relatórios de triagem
+- `vec_chunks` - Vetores RAG (sqlite-vec)
+
 ## Limitações
 
 - Triagem inicial, não substitui avaliação técnica completa
