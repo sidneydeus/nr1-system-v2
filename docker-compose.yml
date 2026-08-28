@@ -13,3 +13,40 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  mcp-inspection:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: nr1-mcp-inspection
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nr1-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nr1-agent
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - SQLITE_DB_PATH=/data/nr1.db
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL}
+      - MCP_INSPECTION_URL=http://mcp-inspection:8001
+    depends_on:
+      sqlite:
+        condition: service_healthy
+      mcp-inspection:
+        condition: service_healthy
+    volumes:
+      - ./data:/data

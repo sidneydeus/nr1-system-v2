@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -7,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.log_store import setup_json_logging
 from app.models import (
     ChatRequest,
     ChatResponse,
@@ -16,6 +18,9 @@ from app.models import (
     SessionSnapshot,
 )
 from app.service import ConversationService
+
+
+setup_json_logging(logging.INFO)
 
 
 app = FastAPI(title="NR-1 Agent", version="0.1.0")
