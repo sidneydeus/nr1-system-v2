@@ -6,7 +6,7 @@ from pathlib import Path
 
 from groq import Groq
 
-from app.models import ChatMessage, Role
+from nr1_agent.models import ChatMessage, Role
 
 
 SYSTEM_PROMPT = """Você é um assistente conversacional para triagem NR-1.

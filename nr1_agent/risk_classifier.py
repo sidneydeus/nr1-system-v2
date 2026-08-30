@@ -3,7 +3,7 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import dataclass
 
-from app.models import SessionState
+from nr1_agent.models import SessionState
 
 
 @dataclass(frozen=True, slots=True)

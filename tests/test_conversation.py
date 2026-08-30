@@ -2,13 +2,13 @@ import os
 import sqlite3
 from unittest.mock import patch, MagicMock
 
-from app.llm import LLMClient
-from app.report_store import SQLiteReportStore
-from app.service import ConversationService
+from nr1_agent.llm import LLMClient
+from nr1_agent.report_store import SQLiteReportStore
+from nr1_agent.service import ConversationService
 
 
 def test_conversation_saves_report_without_sending_it_to_user(tmp_path, caplog) -> None:
-    caplog.set_level("WARNING", logger="app.alerts")
+    caplog.set_level("WARNING", logger="nr1_agent.alerts")
     database_path = tmp_path / "reports.db"
     service = ConversationService(
         llm=LLMClient(),

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.graph import ConversationGraph
-from app.llm import LLMClient
-from app.log_store import SQLiteLogStore
-from app.models import ChatMessage, ChatResponse, Role, SessionSnapshot, SessionStatus
-from app.report_store import SQLiteReportStore
-from app.session_store import InMemorySessionStore
+from nr1_agent.graph import ConversationGraph
+from nr1_agent.llm import LLMClient
+from nr1_agent.log_store import SQLiteLogStore
+from nr1_agent.models import ChatMessage, ChatResponse, Role, SessionSnapshot, SessionStatus
+from nr1_agent.report_store import SQLiteReportStore
+from nr1_agent.session_store import InMemorySessionStore
 
 
 @dataclass(slots=True)

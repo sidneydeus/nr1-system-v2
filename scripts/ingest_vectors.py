@@ -18,15 +18,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import TextLoader, PyPDFLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from app.vector_store import init_vector_table, insert_chunks, clear_vectors, count_vectors
+from nr1_agent.vector_store import init_vector_table, insert_chunks, clear_vectors, count_vectors
 
 
-EMBEDDINGS = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+_embeddings = None
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
+
+
+def get_embeddings():
+    """Carrega o modelo somente quando uma ingestão for realmente solicitada."""
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return _embeddings
 
 
 def ingest_file(file_path: str, source: str | None = None) -> int:
@@ -37,7 +45,13 @@ def ingest_file(file_path: str, source: str | None = None) -> int:
 
     init_vector_table()
 
-    loader = TextLoader(str(path), encoding="utf-8")
+    # Escolher loader baseado na extensão
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        loader = PyPDFLoader(str(path))
+    else:
+        loader = TextLoader(str(path), encoding="utf-8")
+
     documents = loader.load()
 
     text_splitter = RecursiveCharacterTextSplitter(
@@ -48,7 +62,7 @@ def ingest_file(file_path: str, source: str | None = None) -> int:
     source_name = source or path.name
     chunk_dicts = []
     for doc in docs:
-        embedding = EMBEDDINGS.embed_query(doc.page_content)
+        embedding = get_embeddings().embed_query(doc.page_content)
         chunk_dicts.append({
             "embedding": embedding,
             "content": doc.page_content,
@@ -65,7 +79,10 @@ def reindex_all() -> int:
     clear_vectors()
     init_vector_table()
 
-    default_file = "data/procedimentos_seguranca_industria.md"
+    default_file = "data/procedimentos_seguranca_ambientes_industriais.pdf"
+    if not __import__("os").path.exists(default_file):
+        print(f"Nenhum documento padrão encontrado em {default_file}. Reindexação concluída sem documentos base.")
+        return 0
     return ingest_file(default_file)
 
 

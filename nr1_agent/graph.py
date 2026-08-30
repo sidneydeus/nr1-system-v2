@@ -2,16 +2,22 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import AIMessage, ToolMessage
-from app.alerts import send_admin_report_alert
-from app.llm import LLMClient
-from app.log_store import SQLiteLogStore, StructuredLogger
-from app.models import ChatMessage, GeneratedReport, Role, SessionState, SessionStatus
-from app.risk_classifier import classify, format_assessment
-from app.session_store import InMemorySessionStore
-from app.tools.retriever import create_retriever
-from app.tools.specialist_tools import agendar_servico_externo
-from app.tools.mcp_tools import get_mcp_tools
-from app.webhook import notify_scheduling_webhook
+from nr1_agent.otel_client import (
+    trace_tool_invocation,
+    trace_state_transition,
+    trace_risk_classification,
+    trace_webhook_event,
+)
+from nr1_agent.alerts import send_admin_report_alert
+from nr1_agent.llm import LLMClient
+from nr1_agent.log_store import SQLiteLogStore, StructuredLogger
+from nr1_agent.models import ChatMessage, GeneratedReport, Role, SessionState, SessionStatus
+from nr1_agent.risk_classifier import classify, format_assessment
+from nr1_agent.session_store import InMemorySessionStore
+from nr1_agent.tools.retriever import create_retriever
+from nr1_agent.tools.specialist_tools import agendar_servico_externo
+from nr1_agent.tools.mcp_tools import get_mcp_tools
+from nr1_agent.webhook import notify_scheduling_webhook
 
 MAX_QUESTIONS = 5
 MIN_RESPONSE_LENGTH = 3
@@ -50,6 +56,7 @@ class ConversationGraph:
         self.log_store = log_store
         self.retriever = create_retriever()
         self.tools = [agendar_servico_externo] + get_mcp_tools()
+        self.langfuse_handler = None
         self.graph = self._build_graph()
 
     def _create_logger(self, session: SessionState) -> StructuredLogger:
@@ -61,7 +68,10 @@ class ConversationGraph:
         )
 
     def invoke(self, session_id: str, message: str) -> ConversationGraphState:
-        return self.graph.invoke({"session_id": session_id, "message": message, "messages": []})
+        config = {}
+        if self.langfuse_handler:
+            config["callbacks"] = [self.langfuse_handler]
+        return self.graph.invoke({"session_id": session_id, "message": message, "messages": []}, config=config)
 
     def _build_graph(self):
         builder = StateGraph(ConversationGraphState)
@@ -136,7 +146,7 @@ class ConversationGraph:
         session = self.store.get(state["session_id"])
         logger = self._create_logger(session)
         if session.status == SessionStatus.awaiting_name:
-            logger.session_start()
+            logger.info("SESSION_START", f"Nova sessão iniciada com ID '{session.session_id}'")
         return {"session": session, "previous_status": session.status, "logger": logger}
 
     def _record_user_message(self, state: ConversationGraphState) -> ConversationGraphState:
@@ -144,6 +154,8 @@ class ConversationGraph:
         logger = state.get("logger", self._create_logger(session))
         message = state["message"].strip()
         session.messages.append(ChatMessage(role=Role.user, content=message))
+        if session.status == SessionStatus.collecting:
+            logger.info("USER_RESPONSE", f"Usuário respondeu pergunta {session.question_count + 1} de {MAX_QUESTIONS}")
         return {"session": session, "logger": logger}
 
     def _route_turn(self, state: ConversationGraphState):
@@ -164,6 +176,8 @@ class ConversationGraph:
         session.status = SessionStatus.awaiting_sector
         assistant_message = self.llm.fixed_response("ask_sector")
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
+        logger = state.get("logger", self._create_logger(session))
+        logger.info("NAME_COLLECTED", f"Nome coletado: {message}")
         return {"session": session, "assistant_message": assistant_message}
 
     def _handle_sector(self, state: ConversationGraphState):
@@ -174,15 +188,19 @@ class ConversationGraph:
         assistant_message = self.llm.fixed_response("ask_question", self._current_question(session))
         session.asked_questions.append(assistant_message)
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
+        logger = state.get("logger", self._create_logger(session))
+        logger.info("SECTOR_COLLECTED", f"Setor coletado: {message}")
         return {"session": session, "assistant_message": assistant_message}
 
     def _handle_collecting(self, state: ConversationGraphState):
         session, message = state["session"], self._validate_response(state["message"], "resposta")
         session.question_count += 1
         session.answers.append(message)
+        logger = state.get("logger", self._create_logger(session))
         if session.question_count >= MAX_QUESTIONS:
             session.status = SessionStatus.processing
             assistant_message = "Obrigado pelas respostas. Processando as informações para classificar o risco..."
+            logger.info("INITIAL_QUESTIONS_COMPLETE", f"Usuário respondeu todas as {MAX_QUESTIONS} perguntas iniciais")
         else:
             assistant_message = self.llm.fixed_response("ask_question", self._current_question(session))
             session.asked_questions.append(assistant_message)
@@ -205,7 +223,16 @@ class ConversationGraph:
         classification = assessment.classification
         session.classification = classification
         session.report = report
+        logger.info("RISK_CLASSIFICATION", f"Classificação realizada com resultado '{classification}'")
         logger.risk_classification(classification, {"categories": assessment.categories, "evidence": assessment.evidence})
+        trace_risk_classification(
+            classification=classification,
+            session_id=session.session_id,
+            user_name=session.user_name,
+            sector=session.sector,
+            categories=list(assessment.categories) if assessment.categories else None,
+            evidence=list(assessment.evidence) if assessment.evidence else None,
+        )
         if classification in {"Médio / Alerta", "Alto / Crítico"}:
             session.status = SessionStatus.awaiting_specialist_consent
             assistant_message = (
@@ -238,12 +265,23 @@ class ConversationGraph:
             session.specialist_question_count = 0
             assistant_message = self.llm.fixed_response("ask_question", self._current_specialist_question(session))
             session.specialist_asked_questions.append(assistant_message)
+            logger.info("SPECIALIST_CONSENT", "Usuário aceitou falar com agente especialista")
         else:
             session.status = SessionStatus.complete
             assistant_message = "Entendido. A triagem está concluída. O relatório foi salvo para consulta administrativa."
             logger.session_end(classification=session.classification)
+            logger.info("SPECIALIST_CONSENT", "Usuário recusou falar com agente especialista")
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
         logger.state_transition(previous_status.value, session.status.value, {"wants_specialist": wants_specialist})
+        trace_state_transition(
+            from_status=previous_status.value,
+            to_status=session.status.value,
+            session_id=session.session_id,
+            user_name=session.user_name,
+            sector=session.sector,
+            classification=session.classification,
+            details={"wants_specialist": wants_specialist},
+        )
         return {"session": session, "assistant_message": assistant_message, "logger": logger}
 
     def _route_after_specialist_consent(self, state: ConversationGraphState):
@@ -255,6 +293,7 @@ class ConversationGraph:
         message = self._validate_response(state["message"], "resposta")
         session.specialist_question_count += 1
         session.specialist_answers.append(message)
+        logger.info("SPECIALIST_RESPONSE", f"Usuário respondeu pergunta {session.specialist_question_count} de {SPECIALIST_MAX_QUESTIONS} do especialista")
         if session.specialist_question_count >= SPECIALIST_MAX_QUESTIONS:
             session.status = SessionStatus.awaiting_schedule_consent
             assistant_message = (
@@ -296,12 +335,23 @@ class ConversationGraph:
                 "Para aprovar e agendar, digite **'sim'**. Para cancelar, digite **'não**'."
             )
             session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message, tool_calls=session.pending_tool_calls))
+            logger.info("SCHEDULE_CONSENT", f"Agendamento oferecido para {tomorrow} às 14:00 no setor {session.sector}")
         else:
             session.status = SessionStatus.complete
             assistant_message = "Entendido. A triagem está concluída. O relatório foi salvo para consulta administrativa."
             logger.session_end(classification=session.classification)
+            logger.info("SCHEDULE_CONSENT", "Usuário recusou agendamento de inspeção")
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
         logger.state_transition(previous_status.value, session.status.value, {"wants_schedule": wants_schedule})
+        trace_state_transition(
+            from_status=previous_status.value,
+            to_status=session.status.value,
+            session_id=session.session_id,
+            user_name=session.user_name,
+            sector=session.sector,
+            classification=session.classification,
+            details={"wants_schedule": wants_schedule, "schedule_date": tomorrow if wants_schedule else None},
+        )
         return {"session": session, "assistant_message": assistant_message, "logger": logger}
 
     def _route_after_schedule_consent(self, state: ConversationGraphState):
@@ -322,6 +372,7 @@ class ConversationGraph:
         previous_status = session.status
         session.status = SessionStatus.complete
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
+        logger.info("PROCESS_END", f"Fim do processo - classificação final: {session.classification}")
         logger.session_end(classification=session.classification)
         logger.state_transition(previous_status.value, session.status.value, {})
         return {"session": session, "assistant_message": assistant_message, "report": report, "classification": session.classification, "logger": logger}
@@ -336,8 +387,9 @@ class ConversationGraph:
         session = state["session"]
         logger = state.get("logger", self._create_logger(session))
         approved = state["message"].strip().lower() == "sim"
-        logger.human_approval("schedule_inspection", approved, {"classification": session.classification, "sector": session.sector})
         if approved:
+            logger.info("APPROVAL", "Usuário aprovou o agendamento da inspeção")
+            logger.human_approval("schedule_inspection", approved, {"classification": session.classification, "sector": session.sector})
             last_tool_call_message = None
             for msg in reversed(session.messages):
                 if msg.tool_calls:
@@ -359,13 +411,23 @@ class ConversationGraph:
                 all_messages = [m for m in session.messages]
                 return {"session": session, "messages": all_messages, "classification": session.classification, "report": session.report, "logger": logger}
         else:
-            assistant_message = "Acao cancelada pelo usuario."
+            logger.info("APPROVAL", "Usuário recusou/cancelou o agendamento da inspeção")
+            assistant_message = "Ação cancelada pelo usuário."
             session.pending_tool_calls = []
             previous_status = session.status
             session.status = SessionStatus.complete
             session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
             logger.session_end(classification=session.classification)
             logger.state_transition(previous_status.value, session.status.value, {"approved": False})
+            trace_state_transition(
+                from_status=previous_status.value,
+                to_status=session.status.value,
+                session_id=session.session_id,
+                user_name=session.user_name,
+                sector=session.sector,
+                classification=session.classification,
+                details={"approved": False},
+            )
             return {"session": session, "assistant_message": assistant_message, "classification": session.classification, "report": session.report, "logger": logger}
 
     def _route_after_approval(self, state: ConversationGraphState):
@@ -374,11 +436,22 @@ class ConversationGraph:
 
     def _send_admin_report_alert(self, state: ConversationGraphState):
         classification = state["classification"]
-        logger = state.get("logger")
+        logger = state.get("logger", self._create_logger(state["session"]))
         if not classification:
             return {"logger": logger}
         message = "O relatório gerado necessita de ação de verificação de risco."
+        logger.warning("ADMIN_ALERT", f"Responsável pelo setor avisado - classificação: {classification}")
         send_admin_report_alert(state["session"].session_id, classification, message, self.log_store)
+        trace_webhook_event(
+            event_type="admin_report_alert",
+            payload={
+                "session_id": state["session"].session_id,
+                "classification": classification,
+                "message": message,
+            },
+            session_id=state["session"].session_id,
+            success=True,
+        )
         return {
             "alert_message": message,
             "report": state["session"].report,
@@ -407,6 +480,15 @@ class ConversationGraph:
                     if tool_func:
                         result = tool_func.invoke(tool_args)
                         logger.tool_invocation(tool_name, tool_args, result)
+                        trace_tool_invocation(
+                            tool_name=tool_name,
+                            parameters=tool_args,
+                            result=result,
+                            session_id=session.session_id,
+                            user_name=session.user_name,
+                            sector=session.sector,
+                            classification=session.classification,
+                        )
                         tool_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id))
         return {"messages": tool_messages, "session": session, "classification": session.classification, "report": session.report, "logger": logger}
 
@@ -426,25 +508,51 @@ class ConversationGraph:
         session.messages.append(ChatMessage(role=Role.assistant, content=assistant_message))
         previous_status = session.status
         session.status = SessionStatus.complete
-        session.pending_tool_calls = []
-        logger.session_end(classification=session.classification)
-        logger.state_transition(previous_status.value, session.status.value, {"tool_result": tool_result})
 
-        # Webhook notification for scheduling tools
+        # Webhook notification for scheduling tools (before clearing pending_tool_calls)
         scheduling_tools = {"schedule_inspection", "agendar_inspecao_interna", "agendar_servico_externo"}
-        for msg in messages:
-            tool_calls = getattr(msg, 'tool_calls', None)
-            if tool_calls:
-                for tc in tool_calls:
-                    if tc["name"] in scheduling_tools:
-                        # Find the corresponding ToolMessage result
-                        result = None
-                        for m in reversed(messages):
-                            if isinstance(m, ToolMessage) and m.tool_call_id == tc["id"]:
-                                result = m.content
-                                break
-                        import asyncio
-                        asyncio.create_task(notify_scheduling_webhook(
+        pending_tool_calls = getattr(session, 'pending_tool_calls', [])
+        if pending_tool_calls:
+            for tc in pending_tool_calls:
+                if tc["name"] in scheduling_tools:
+                    # Find the corresponding ToolMessage result
+                    result = None
+                    for m in reversed(messages):
+                        if isinstance(m, ToolMessage) and m.tool_call_id == tc["id"]:
+                            result = m.content
+                            break
+                    logger.info("TOOL_EXECUTED", f"Agendamento realizado via tool '{tc['name']}' - ID: {tc['args'].get('customer', 'N/A')}")
+                    import asyncio
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            loop.create_task(notify_scheduling_webhook(
+                                f"{tc['name']}_completed",
+                                {
+                                    "session_id": session.session_id,
+                                    "user_name": session.user_name,
+                                    "sector": session.sector,
+                                    "classification": session.classification,
+                                    "tool": tc["name"],
+                                    "args": tc["args"],
+                                    "result": result,
+                                }
+                            ))
+                        else:
+                            asyncio.run(notify_scheduling_webhook(
+                                f"{tc['name']}_completed",
+                                {
+                                    "session_id": session.session_id,
+                                    "user_name": session.user_name,
+                                    "sector": session.sector,
+                                    "classification": session.classification,
+                                    "tool": tc["name"],
+                                    "args": tc["args"],
+                                    "result": result,
+                                }
+                            ))
+                    except RuntimeError:
+                        asyncio.run(notify_scheduling_webhook(
                             f"{tc['name']}_completed",
                             {
                                 "session_id": session.session_id,
@@ -456,7 +564,25 @@ class ConversationGraph:
                                 "result": result,
                             }
                         ))
-                        break
+                    trace_webhook_event(
+                        event_type=f"{tc['name']}_completed",
+                        payload={
+                            "session_id": session.session_id,
+                            "user_name": session.user_name,
+                            "sector": session.sector,
+                            "classification": session.classification,
+                            "tool": tc["name"],
+                            "args": tc["args"],
+                            "result": result,
+                        },
+                        session_id=session.session_id,
+                        success=True,
+                    )
+                    break
+
+        session.pending_tool_calls = []
+        logger.session_end(classification=session.classification)
+        logger.state_transition(previous_status.value, session.status.value, {"tool_result": tool_result})
 
         return {"session": session, "assistant_message": assistant_message, "classification": session.classification, "report": session.report, "logger": logger}
 

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from threading import Lock
 from uuid import uuid4
 
-from app.models import ChatMessage, Role, SessionState
+from nr1_agent.models import ChatMessage, Role, SessionState
 
 
 class InMemorySessionStore:

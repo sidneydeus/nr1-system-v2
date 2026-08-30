@@ -1,0 +1,152 @@
+{
+  "name": "Ingestão de Documentos NR-1",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst binary = item.binary ?? {};\nconst binaryName = Object.keys(binary).find((name) => binary[name]?.data);\n\nif (!binaryName) {\n  throw new Error('Nenhum arquivo foi recebido pelo formulário.');\n}\n\nitem.binary = { ...binary, file: binary[binaryName] };\nreturn item;"
+      },
+      "id": "normalizeBinary",
+      "name": "Normalize Upload Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Upload de Documento para Ingestão",
+        "formDescription": "Selecione um arquivo .md, .txt ou .pdf para enviar à aplicação NR-1",
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "file",
+              "fieldLabel": "Arquivo",
+              "fieldName": "file",
+              "requiredField": true,
+              "acceptFileTypes": ".md, .txt, .pdf, .markdown",
+              "multipleFiles": false
+            },
+            {
+              "fieldType": "text",
+              "fieldLabel": "Nome da Fonte (opcional)",
+              "fieldName": "source",
+              "placeholder": "Ex: manual_seguranca.pdf",
+              "requiredField": false
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "formTrigger",
+      "name": "Form Trigger - Upload",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        250,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://nr1-agent:8000/test-upload",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            },
+            {
+              "parameterType": "formData",
+              "name": "source",
+              "value": "={{ $json.source || $binary.file.fileName }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "httpRequest",
+      "name": "HTTP Request - Ingest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        750,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "={{ $json.status || 'success' }}"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.message || 'Arquivo enviado para ingestão.' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "success",
+      "name": "Success - Resposta OK",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        950,
+        150
+      ]
+    }
+  ],
+  "connections": {
+    "Form Trigger - Upload": {
+      "main": [
+        [
+          {
+            "node": "Normalize Upload Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Upload Binary": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request - Ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request - Ingest": {
+      "main": [
+        [
+          {
+            "node": "Success - Resposta OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "1",
+  "meta": {}
+}

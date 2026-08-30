@@ -1,5 +1,5 @@
-from app.models import SessionState
-from app.risk_classifier import classify
+from nr1_agent.models import SessionState
+from nr1_agent.risk_classifier import classify
 
 
 def test_classifies_high_risk_from_immediate_mechanical_danger() -> None:

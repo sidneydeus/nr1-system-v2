@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.main import app, frontend_dir
+from nr1_agent.main import app, frontend_dir
 
 
 def test_frontend_files_exist() -> None:

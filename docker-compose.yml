@@ -14,6 +14,30 @@ services:
       timeout: 5s
       retries: 5
 
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: nr1-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=admin123
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+    volumes:
+      - ./data:/data
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      sqlite:
+        condition: service_healthy
+      nr1-agent:
+        condition: service_healthy
+
   mcp-inspection:
     build:
       context: .
@@ -37,16 +61,25 @@ services:
     container_name: nr1-agent
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8003:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     environment:
       - SQLITE_DB_PATH=/data/nr1.db
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - GROQ_MODEL=${GROQ_MODEL}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
       - MCP_INSPECTION_URL=http://mcp-inspection:8001
     depends_on:
       sqlite:
         condition: service_healthy
       mcp-inspection:
         condition: service_healthy
+
     volumes:
       - ./data:/data
+
+volumes:
+  n8n_data:

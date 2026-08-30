@@ -1,10 +1,10 @@
 import os
 from unittest.mock import MagicMock, patch
 
-from app.llm import LLMClient
-from app.models import ChatMessage, Role, SessionStatus
-from app.report_store import SQLiteReportStore
-from app.service import ConversationService
+from nr1_agent.llm import LLMClient
+from nr1_agent.models import ChatMessage, Role, SessionStatus
+from nr1_agent.report_store import SQLiteReportStore
+from nr1_agent.service import ConversationService
 
 
 def test_high_risk_triggers_specialist_and_approval_flow(tmp_path):
@@ -22,7 +22,7 @@ def test_high_risk_triggers_specialist_and_approval_flow(tmp_path):
     mock_assessment = MagicMock()
     mock_assessment.classification = "Alto / Crítico"
 
-    with patch('app.graph.classify', return_value=mock_assessment):
+    with patch('nr1_agent.graph.classify', return_value=mock_assessment):
 
         # 1. Inicia a conversa
         start = service.start()

@@ -1,10 +1,10 @@
 import os
 from unittest.mock import MagicMock, patch
 
-from app.llm import LLMClient
-from app.models import ChatMessage, Role
-from app.tools.specialist_tools import agendar_inspecao_interna, agendar_servico_externo
-from app.tools.mcp_tools import get_mcp_tools
+from nr1_agent.llm import LLMClient
+from nr1_agent.models import ChatMessage, Role
+from nr1_agent.tools.specialist_tools import agendar_inspecao_interna, agendar_servico_externo
+from nr1_agent.tools.mcp_tools import get_mcp_tools
 
 
 def test_specialist_agent_resists_prompt_injection():

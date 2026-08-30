@@ -2,16 +2,20 @@ import os
 import httpx
 import logging
 
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+logger = logging.getLogger(__name__)
+
+def get_webhook_url() -> str | None:
+    return os.getenv("WEBHOOK_URL")
 
 async def notify_scheduling_webhook(event_type: str, payload: dict) -> bool:
     """Fire-and-forget webhook for scheduling events. Non-blocking, 5s timeout."""
-    if not WEBHOOK_URL:
+    webhook_url = get_webhook_url()
+    if not webhook_url:
         return False
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(WEBHOOK_URL, json={"event": event_type, **payload})
+            await client.post(webhook_url, json={"event": event_type, **payload})
         return True
     except Exception as e:
-        logging.getLogger(__name__).warning(f"Webhook failed: {e}")
+        logger.warning(f"Webhook failed: {e}")
         return False

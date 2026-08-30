@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from app.log_store import SQLiteLogStore
+from nr1_agent.log_store import SQLiteLogStore
 
 logger = logging.getLogger(__name__)
 

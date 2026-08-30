@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml .
 RUN pip install --no-cache-dir fastapi uvicorn httpx pydantic
 
-COPY app/ ./app/
+COPY nr1_agent/ ./nr1_agent/
 
 EXPOSE 8001
 
-CMD ["python", "-m", "app.mcp_http_server"]
+CMD ["python", "-m", "nr1_agent.mcp_http_server"]

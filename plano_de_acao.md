@@ -22,7 +22,7 @@ Este plano de ação descreve os passos para evoluir o `nr1-agent`, introduzindo
 **Foco:** Construir o "cérebro" e os "braços" do novo agente.
 
 -   [x] **(RAG) Criar Base de Conhecimento:**
-    -   [x] Criar o arquivo `data/procedimentos_seguranca_industria.md` para simular as normas internas da empresa.
+    -   [x] Usar o documento `data/procedimentos_seguranca_ambientes_industriais.pdf` como base das normas internas.
     -   [x] Implementar a lógica para carregar, processar (chunking) e criar um `retriever` para este documento.
 -   [x] **(Tools) Desenvolver Ferramentas do Especialista:**
     -   [x] Implementar a função `agendar_inspecao_interna(setor: str, detalhes: str)`.
