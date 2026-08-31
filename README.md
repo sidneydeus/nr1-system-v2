@@ -343,7 +343,7 @@ python scripts/ingest_vectors.py --reindex
 # Ver stats do vector store
 python scripts/ingest_vectors.py --stats
 
-# Reset completo do banco
+# Limpar os dados persistentes do banco
 python scripts/reset_db.py
 python scripts/ingest_vectors.py --reindex
 
@@ -390,7 +390,7 @@ O fluxo completo está documentado em [`docs/fluxo-aplicacao.mmd`](docs/fluxo-ap
 
 ## Reset do Banco de Dados
 
-Para limpar todos os dados (logs, relatórios, vetores RAG) e reiniciar do zero:
+Para limpar todos os dados persistentes (logs, relatórios e vetores RAG):
 
 ```bash
 # Opção 1: Script dedicado (recomendado)
@@ -401,6 +401,14 @@ rm data/nr1.db
 
 # Após reset, reindexar base de conhecimento RAG:
 python scripts/ingest_vectors.py --reindex
+```
+
+O script respeita `SQLITE_DB_PATH` (usado pelo Docker). Como as sessões do chat
+são mantidas em memória, reinicie o agente após a limpeza se precisar descartar
+sessões abertas:
+
+```bash
+docker compose restart nr1-agent
 ```
 
 **Tabelas afetadas:**
