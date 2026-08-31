@@ -422,3 +422,6 @@ docker compose restart nr1-agent
 - Qualidade depende das respostas do colaborador
 - RAG baseado no documento `procedimentos_seguranca_ambientes_industriais.pdf`
 - Classificação baseada em regras NR-1 codificadas, não ML puro
+
+Vídeo: https://youtu.be/M9ML15PR31s
+Board de tarefas: https://github.com/users/sidneydeus/projects/2
