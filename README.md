@@ -163,7 +163,7 @@ Span: webhook.scheduling
 
 ### Código - Nenhuma alteração no grafo necessário
 
-O `ConversationGraph` continua exatamente o mesmo - o `langfuse_handler` é polimórfico e funciona tanto com Langfuse quanto com OpenTelemetry:
+O `ConversationGraph` continua exatamente o mesmo - a instrumentação OpenTelemetry funciona nativamente:
 
 ```python
 from nr1_agent.graph import ConversationGraph

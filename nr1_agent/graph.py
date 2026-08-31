@@ -56,7 +56,6 @@ class ConversationGraph:
         self.log_store = log_store
         self.retriever = create_retriever()
         self.tools = [agendar_servico_externo] + get_mcp_tools()
-        self.langfuse_handler = None
         self.graph = self._build_graph()
 
     def _create_logger(self, session: SessionState) -> StructuredLogger:
@@ -69,8 +68,6 @@ class ConversationGraph:
 
     def invoke(self, session_id: str, message: str) -> ConversationGraphState:
         config = {}
-        if self.langfuse_handler:
-            config["callbacks"] = [self.langfuse_handler]
         return self.graph.invoke({"session_id": session_id, "message": message, "messages": []}, config=config)
 
     def _build_graph(self):
