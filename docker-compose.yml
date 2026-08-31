@@ -38,6 +38,15 @@ services:
       nr1-agent:
         condition: service_healthy
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: nr1-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
   mcp-inspection:
     build:
       context: .
@@ -72,11 +81,14 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
       - MCP_INSPECTION_URL=http://mcp-inspection:8001
+      - JAEGER_ENDPOINT=http://jaeger:4318/v1/traces
     depends_on:
       sqlite:
         condition: service_healthy
       mcp-inspection:
         condition: service_healthy
+      jaeger:
+        condition: service_started
 
     volumes:
       - ./data:/data
